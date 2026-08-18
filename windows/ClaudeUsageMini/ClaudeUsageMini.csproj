@@ -17,4 +17,11 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- UseWindowsForms injects a global `using System.Drawing`, which collides
+         with System.Windows.Media (Brush, Color) in the WPF views. Drop the
+         global one; App.xaml.cs keeps a file-scoped using for the tray bitmap. -->
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
 </Project>
