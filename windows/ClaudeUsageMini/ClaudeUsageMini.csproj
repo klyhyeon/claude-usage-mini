@@ -4,6 +4,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <!-- NotifyIcon (the tray icon) lives in WinForms; WPF has no equivalent. -->
     <UseWindowsForms>true</UseWindowsForms>
