@@ -20,7 +20,23 @@ struct PopoverView: View {
         }
         .padding(12)
         .frame(width: 300)
+        .background(Theme.panel)
+        .preferredColorScheme(.dark)
     }
+}
+
+/// Fixed dark palette matching the Windows mockup the user picked —
+/// deliberately one look, not theme-following.
+enum Theme {
+    static let panel = Color(red: 40/255, green: 40/255, blue: 40/255)
+    static let card = Color(red: 51/255, green: 51/255, blue: 51/255)
+    static let cardBorder = Color.white.opacity(0.06)
+    static let title = Color.white
+    static let dim = Color(red: 160/255, green: 160/255, blue: 160/255)
+    static let faint = Color(red: 122/255, green: 122/255, blue: 122/255)
+    static let track = Color.white.opacity(0.12)
+    static let green = Color(red: 108/255, green: 203/255, blue: 95/255)
+    static let badgeBg = Color.white.opacity(0.10)
 }
 
 private struct LimitCard: View {
@@ -30,17 +46,19 @@ private struct LimitCard: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text(limit.title)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.title)
                 if let badge = limit.badge {
                     Text(badge)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Theme.dim)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2)
-                        .background(Capsule().fill(.quaternary))
+                        .background(Capsule().fill(Theme.badgeBg))
                 }
                 Spacer()
                 Text("\(Int(limit.percent.rounded()))%")
-                    .font(.system(size: 16, weight: .bold))
+                    .font(.system(size: 14, weight: .bold))
                     .monospacedDigit()
                     .foregroundStyle(tint)
             }
@@ -48,7 +66,7 @@ private struct LimitCard: View {
             if let subtitle = limit.subtitle {
                 Text(subtitle)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.dim)
             }
 
             ProgressBar(fraction: limit.percent / 100, tint: tint)
@@ -56,22 +74,22 @@ private struct LimitCard: View {
             if let resetsAt = limit.resetsAt {
                 Text("Resets \(Self.format(resetsAt))")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.dim)
             }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(.quinary)
-                .stroke(.separator, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Theme.card)
+                .stroke(Theme.cardBorder, lineWidth: 1)
         )
     }
 
     /// Green under 70, amber to 90, red past it — a glanceable severity ramp.
     private var tint: Color {
         switch limit.percent {
-        case ..<70: .green
+        case ..<70: Theme.green
         case ..<90: .orange
         default: .red
         }
@@ -92,7 +110,7 @@ private struct ProgressBar: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(.quaternary)
+                Capsule().fill(Theme.track)
                 Capsule()
                     .fill(tint)
                     .frame(width: max(0, min(1, fraction)) * geo.size.width)
@@ -109,9 +127,10 @@ private struct SessionKeyPrompt: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Connect your account")
                 .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Theme.title)
             Text("Sign in to claude.ai and the session key is picked up automatically.")
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.dim)
             Button("Sign In") { model.signIn() }
                 .buttonStyle(.borderedProminent)
 
@@ -128,7 +147,7 @@ private struct SessionKeyPrompt: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10).fill(.quinary))
+        .background(RoundedRectangle(cornerRadius: 6).fill(Theme.card))
     }
 }
 
@@ -138,10 +157,10 @@ private struct MessageCard: View {
     var body: some View {
         Text(text)
             .font(.system(size: 12))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Theme.dim)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
-            .background(RoundedRectangle(cornerRadius: 10).fill(.quinary))
+            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.card))
     }
 }
 
@@ -153,7 +172,7 @@ private struct Footer: View {
             if let fetchedAt = model.usage?.fetchedAt {
                 Text("Updated \(fetchedAt.formatted(.dateTime.hour().minute()))")
                     .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.faint)
             }
             Spacer()
             Button("Refresh") { Task { await model.refresh() } }

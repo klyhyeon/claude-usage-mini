@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @main
@@ -38,7 +39,8 @@ final class UsageModel: ObservableObject {
     }
 
     /// Session percentage, Fable weekly in parentheses, session reset time —
-    /// "25%(1%) · 2:00pm".
+    /// "25%(1%) · 2:00pm". Kept monochrome — the menu bar renders label text as
+    /// a template, so it follows the system tint like every other extra.
     var menuBarLabel: String {
         guard let limits = usage?.limits, !limits.isEmpty else { return "—" }
         let session = limits.first { $0.id == "session" }
