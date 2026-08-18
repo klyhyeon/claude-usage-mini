@@ -18,10 +18,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- UseWindowsForms injects a global `using System.Drawing`, which collides
-         with System.Windows.Media (Brush, Color) in the WPF views. Drop the
-         global one; App.xaml.cs keeps a file-scoped using for the tray bitmap. -->
+    <!-- UseWindowsForms injects global usings for System.Drawing and
+         System.Windows.Forms, which collide with System.Windows.Media / .Controls
+         (Brush, Color, Button, Orientation) throughout the WPF views. Drop both
+         globals; the two files that genuinely use WinForms (App.xaml.cs,
+         CookieJar's HiddenHost) import them with file-scoped usings instead. -->
     <Using Remove="System.Drawing" />
+    <Using Remove="System.Windows.Forms" />
   </ItemGroup>
 
 </Project>
