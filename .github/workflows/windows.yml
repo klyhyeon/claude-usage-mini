@@ -1,0 +1,42 @@
+name: windows
+
+on:
+  push:
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows.yml'
+  pull_request:
+    paths:
+      - 'windows/**'
+  workflow_dispatch:
+
+jobs:
+  parser-check:
+    # Parse logic is platform-agnostic — verify it on cheap Linux runners.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Parser self-check
+        working-directory: windows/Checks
+        run: dotnet run -c Release
+
+  build-exe:
+    runs-on: windows-latest
+    needs: parser-check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Publish single-file exe
+        working-directory: windows/ClaudeUsageMini
+        run: >
+          dotnet publish -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClaudeUsageMini-win-x64
+          path: windows/ClaudeUsageMini/bin/Release/net8.0-windows/win-x64/publish/ClaudeUsageMini.exe

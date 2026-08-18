@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Parser.cs is a generated copy of the parse logic from
+         ClaudeUsageMini/UsageApi.cs so the parser can be tested off-Windows
+         (WPF won't build on macOS/Linux). Regenerate with sync-parser.sh. -->
+  </PropertyGroup>
+</Project>
