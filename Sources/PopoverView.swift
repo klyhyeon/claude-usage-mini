@@ -5,36 +5,30 @@ struct PopoverView: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            ScrollView {
-                VStack(spacing: 10) {
-                    ProviderHeading(title: "Codex")
-                    if let usage = model.codexUsage {
-                        ForEach(usage.limits) { LimitCard(limit: $0) }
-                    } else if model.codexError == nil {
-                        MessageCard(text: model.isLoading ? "Loading Codex usage…" : "No Codex usage reported yet.")
-                    }
-                    if let error = model.codexError {
-                        MessageCard(text: error)
-                    }
+            VStack(spacing: 10) {
+                ProviderHeading(title: "Codex")
+                if let usage = model.codexUsage {
+                    ForEach(usage.limits) { LimitCard(limit: $0) }
+                } else if model.codexError == nil {
+                    MessageCard(text: model.isLoading ? "Loading Codex usage…" : "No Codex usage reported yet.")
+                }
+                if let error = model.codexError {
+                    MessageCard(text: error)
+                }
 
-                    ProviderHeading(title: "Claude")
-                    if let usage = model.claudeUsage, !usage.limits.isEmpty {
-                        ForEach(usage.limits) { LimitCard(limit: $0) }
-                        if let error = model.claudeError { MessageCard(text: error) }
-                    } else if !model.hasSessionKey {
-                        SessionKeyPrompt(model: model)
-                    } else if let error = model.claudeError {
-                        MessageCard(text: error)
-                        Button("Sign In Again") { model.signIn() }
-                    } else {
-                        MessageCard(text: model.isLoading ? "Loading Claude usage…" : "No Claude usage reported yet.")
-                    }
+                ProviderHeading(title: "Claude")
+                if let usage = model.claudeUsage, !usage.limits.isEmpty {
+                    ForEach(usage.limits) { LimitCard(limit: $0) }
+                    if let error = model.claudeError { MessageCard(text: error) }
+                } else if !model.hasSessionKey {
+                    SessionKeyPrompt(model: model)
+                } else if let error = model.claudeError {
+                    MessageCard(text: error)
+                    Button("Sign In Again") { model.signIn() }
+                } else {
+                    MessageCard(text: model.isLoading ? "Loading Claude usage…" : "No Claude usage reported yet.")
                 }
             }
-            // MenuBarExtra can propose a zero-height scroll region while its
-            // window is first measuring. Keep a small floor so the provider
-            // cards/messages remain visible instead of leaving only the footer.
-            .frame(minHeight: 100, maxHeight: 620)
 
             Footer(model: model)
         }
