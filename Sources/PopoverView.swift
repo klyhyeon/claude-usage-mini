@@ -31,7 +31,10 @@ struct PopoverView: View {
                     }
                 }
             }
-            .frame(maxHeight: 620)
+            // MenuBarExtra can propose a zero-height scroll region while its
+            // window is first measuring. Keep a small floor so the provider
+            // cards/messages remain visible instead of leaving only the footer.
+            .frame(minHeight: 100, maxHeight: 620)
 
             Footer(model: model)
         }
