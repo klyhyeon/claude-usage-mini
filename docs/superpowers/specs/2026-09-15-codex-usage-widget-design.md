@@ -97,6 +97,8 @@ Content order is:
 A provider's last successful cards remain visible alongside a refresh error,
 so a temporary failure does not turn useful data into an empty state. The
 shared updated time reflects the most recent successful provider refresh.
+Metric sections scroll inside a bounded-height area when all cards do not fit;
+the shared footer remains visible.
 
 ## Errors
 
@@ -142,4 +144,3 @@ take over the screen without separate user approval.
   source enumeration.
 - `README.md`: document combined macOS behavior, Codex dependency, privacy,
   and the unchanged Windows scope.
-
