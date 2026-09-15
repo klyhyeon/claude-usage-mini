@@ -58,18 +58,24 @@ final class UsageModel: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
-        async let codexRequest = codexAPI.fetch()
-        async let claudeRequest = claudeAPI.fetch()
+        async let codexRefresh: Void = refreshCodex()
+        async let claudeRefresh: Void = refreshClaude()
+        await codexRefresh
+        await claudeRefresh
+    }
 
+    private func refreshCodex() async {
         do {
-            codexUsage = try await codexRequest
+            codexUsage = try await codexAPI.fetch()
             codexError = nil
         } catch {
             codexError = error.localizedDescription
         }
+    }
 
+    private func refreshClaude() async {
         do {
-            let fetched = try await claudeRequest
+            let fetched = try await claudeAPI.fetch()
             claudeUsage = fetched
             claudeError = nil
             StatuslineCache.write(fetched.limits)

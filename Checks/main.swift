@@ -69,6 +69,18 @@ let clampedJSON = #"{"id":3,"result":{"rateLimits":{"limitId":"codex","primary":
 let clamped = try CodexUsageParser.parseResponse(clampedJSON, fetchedAt: fetchedAt)
 precondition(clamped.limits.allSatisfy { $0.percent == 100 })
 
+let lowerClampedJSON = #"{"id":30,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":-12,"windowDurationMins":10080,"resetsAt":null},"secondary":null,"individualLimit":{"limit":"1000","used":"0","remainingPercent":135,"resetsAt":1790812800}},"rateLimitsByLimitId":null}}"#.data(using: .utf8)!
+let lowerClamped = try CodexUsageParser.parseResponse(lowerClampedJSON, fetchedAt: fetchedAt)
+precondition(
+    lowerClamped.limits.allSatisfy { $0.percent == 0 },
+    "negative effective usage must clamp to zero: \(lowerClamped.limits)"
+)
+
+if CommandLine.arguments.dropFirst() == ["--lower-clamp-only"] {
+    print("lower clamp check OK")
+    exit(0)
+}
+
 let wrongBucketJSON = #"{"id":4,"result":{"rateLimits":{"limitId":"other","primary":{"usedPercent":99,"windowDurationMins":10080,"resetsAt":null},"secondary":null,"individualLimit":null},"rateLimitsByLimitId":{"other":{"limitId":"other","primary":{"usedPercent":99,"windowDurationMins":10080,"resetsAt":null},"secondary":null,"individualLimit":null}}}}"#.data(using: .utf8)!
 do {
     _ = try CodexUsageParser.parseResponse(wrongBucketJSON, fetchedAt: fetchedAt)
@@ -112,7 +124,22 @@ let encodedObject = try JSONSerialization.jsonObject(with: Data(encodedRequest.d
 precondition(encodedObject?["id"] as? Int == 7)
 precondition(encodedObject?["method"] as? String == "account/rateLimits/read")
 
+if CommandLine.arguments.dropFirst() == ["--timeout-restart-only"] {
+    try await checkCodexTimeoutRestart(mode: "silent-rate-first")
+    try await checkCodexTimeoutRestart(mode: "silent-initialize-first")
+    print("timeout/restart checks OK")
+    exit(0)
+}
+if CommandLine.arguments.dropFirst() == ["--terminal-error-only"] {
+    try await checkTerminalCodexErrorDoesNotRestart()
+    print("terminal error check OK")
+    exit(0)
+}
+
 try await checkConcurrentCodexFetches()
+try await checkCodexTimeoutRestart(mode: "silent-rate-first")
+try await checkCodexTimeoutRestart(mode: "silent-initialize-first")
+try await checkTerminalCodexErrorDoesNotRestart()
 
 print("parse check OK")
 
@@ -157,17 +184,104 @@ private func checkConcurrentCodexFetches() async throws {
     precondition(events == ["initialize", "rate", "rate"], "overlapping requests: \(events)")
 }
 
+private func checkCodexTimeoutRestart(mode: String) async throws {
+    let executable = URL(
+        fileURLWithPath: CommandLine.arguments[0],
+        relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    ).standardizedFileURL
+    let logURL = executable.deletingLastPathComponent()
+        .appendingPathComponent("codex-usage-\(mode).log")
+    try? FileManager.default.removeItem(at: logURL)
+    FileManager.default.createFile(atPath: logURL.path, contents: Data())
+    setenv("CODEX_USAGE_FAKE_MODE", mode, 1)
+    defer {
+        unsetenv("CODEX_USAGE_FAKE_MODE")
+        try? FileManager.default.removeItem(at: logURL)
+    }
+
+    let watchdog = DispatchWorkItem {
+        fputs("Codex timeout/restart check exceeded its outer bound\n", stderr)
+        exit(1)
+    }
+    DispatchQueue.global().asyncAfter(deadline: .now() + 3, execute: watchdog)
+    defer { watchdog.cancel() }
+
+    let startedAt = Date()
+    let usage: Usage
+    do {
+        usage = try await CodexUsageAPI(
+            executableURL: executable,
+            requestTimeout: .milliseconds(100)
+        ).fetch()
+    } catch {
+        let events = (try? String(contentsOf: logURL, encoding: .utf8)) ?? "<unreadable>"
+        fputs("timeout/restart failure for \(mode): \(error); events: \(events)\n", stderr)
+        throw error
+    }
+    let elapsed = Date().timeIntervalSince(startedAt)
+    precondition(usage.limits.first?.percent == 17, "restarted server response was not parsed")
+    precondition(elapsed < 0.5, "silent \(mode) server was not bounded: \(elapsed)s")
+
+    let events = try String(contentsOf: logURL, encoding: .utf8)
+        .split(separator: "\n")
+        .map(String.init)
+    let expected = mode == "silent-rate-first"
+        ? ["launch", "initialize", "rate", "launch", "initialize", "rate"]
+        : ["launch", "initialize", "launch", "initialize", "rate"]
+    precondition(events == expected, "timeout/restart events for \(mode): \(events)")
+}
+
+private func checkTerminalCodexErrorDoesNotRestart() async throws {
+    let executable = URL(
+        fileURLWithPath: CommandLine.arguments[0],
+        relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    ).standardizedFileURL
+    let mode = "not-signed-in"
+    let logURL = executable.deletingLastPathComponent()
+        .appendingPathComponent("codex-usage-\(mode).log")
+    try? FileManager.default.removeItem(at: logURL)
+    FileManager.default.createFile(atPath: logURL.path, contents: Data())
+    setenv("CODEX_USAGE_FAKE_MODE", mode, 1)
+    defer {
+        unsetenv("CODEX_USAGE_FAKE_MODE")
+        try? FileManager.default.removeItem(at: logURL)
+    }
+
+    do {
+        _ = try await CodexUsageAPI(executableURL: executable).fetch()
+        preconditionFailure("not-signed-in response must fail")
+    } catch CodexUsageError.notSignedIn {}
+
+    let events = try String(contentsOf: logURL, encoding: .utf8)
+        .split(separator: "\n")
+        .map(String.init)
+    precondition(
+        events == ["launch", "initialize", "rate"],
+        "terminal authentication failure restarted the app-server: \(events)"
+    )
+}
+
 private enum FakeCodexAppServer {
     static func run() {
         signal(SIGPIPE, SIG_IGN)
         let input = FileHandle.standardInput
         var readBuffer = Data()
 
+        let mode = ProcessInfo.processInfo.environment["CODEX_USAGE_FAKE_MODE"] ?? "concurrency"
+        if mode != "concurrency" {
+            appendLog("launch")
+        }
+        let launchNumber = mode == "concurrency" ? 1 : launchCount()
+
         guard let initialize = readLine(from: input, buffer: &readBuffer),
               isRequest(initialize, id: 0, method: "initialize") else {
             exit(1)
         }
         appendLog("initialize")
+        if mode == "silent-initialize-first", launchNumber == 1 {
+            Thread.sleep(forTimeInterval: 0.75)
+            return
+        }
         let emptyObject: [String: Any] = [:]
         var initializeResponses = encodedLine([
             "method": "remoteControl/status/changed",
@@ -182,7 +296,24 @@ private enum FakeCodexAppServer {
             exit(1)
         }
         appendLog("rate")
+        if mode == "silent-rate-first", launchNumber == 1 {
+            Thread.sleep(forTimeInterval: 0.75)
+            return
+        }
+        if mode == "not-signed-in" {
+            send(encodedLine([
+                "id": initialID,
+                "error": ["code": -32_000, "message": "authentication required"],
+            ]))
+            Thread.sleep(forTimeInterval: 0.5)
+            return
+        }
         writeRateLimitResponse(id: initialID)
+
+        if mode != "concurrency" {
+            Thread.sleep(forTimeInterval: 0.5)
+            return
+        }
 
         guard let concurrentRate = readLine(from: input, buffer: &readBuffer),
               let concurrentID = requestID(concurrentRate),
@@ -302,12 +433,26 @@ private enum FakeCodexAppServer {
     private static func appendLog(_ event: String) {
         let logURL = URL(fileURLWithPath: CommandLine.arguments[0])
             .deletingLastPathComponent()
-            .appendingPathComponent("codex-usage-concurrency.log")
+            .appendingPathComponent(logFilename)
         guard let log = FileHandle(forWritingAtPath: logURL.path) else {
             exit(1)
         }
         defer { log.closeFile() }
         log.seekToEndOfFile()
         try! log.write(contentsOf: Data("\(event)\n".utf8))
+    }
+
+    private static var logFilename: String {
+        let mode = ProcessInfo.processInfo.environment["CODEX_USAGE_FAKE_MODE"] ?? "concurrency"
+        return "codex-usage-\(mode).log"
+    }
+
+    private static func launchCount() -> Int {
+        let logURL = URL(fileURLWithPath: CommandLine.arguments[0])
+            .deletingLastPathComponent()
+            .appendingPathComponent(logFilename)
+        let events = (try? String(contentsOf: logURL, encoding: .utf8))?
+            .split(separator: "\n") ?? []
+        return events.filter { $0 == "launch" }.count
     }
 }

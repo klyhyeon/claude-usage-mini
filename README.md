@@ -9,9 +9,10 @@ Electron.
 - **macOS** — SwiftUI menu bar app, buildable with Command Line Tools only (no Xcode).
 - **Windows** — .NET 8 / WPF system-tray app.
 
-On macOS, the label reads `C 62%(0%)` — Codex weekly usage and monthly usage.
-Click it for Codex Weekly and Monthly cards followed by the existing Claude
-Session, All models, and per-model cards.
+On macOS, the label reads `C 62%(0%)` — Codex weekly usage and monthly usage
+when available. Click it for the Codex Weekly card, the Monthly card when
+available, and then the existing Claude Session, All models, and per-model
+cards.
 
 ## Features
 
@@ -57,8 +58,8 @@ signed in.
 CUM_DEBUG=1 "./Claude Usage Mini.app/Contents/MacOS/ClaudeUsageMini"
 ```
 
-prints each API request path and raw response body to stderr. `./check.sh` runs
-the parser self-check.
+prints each Claude API request path and raw response body to stderr. Codex
+app-server stderr is discarded. `./check.sh` runs the parser self-check.
 
 ---
 

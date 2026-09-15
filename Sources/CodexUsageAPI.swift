@@ -1,3 +1,5 @@
+import Darwin
+import Dispatch
 import Foundation
 
 enum CodexUsageError: LocalizedError, Equatable {
@@ -5,6 +7,7 @@ enum CodexUsageError: LocalizedError, Equatable {
     case notSignedIn
     case connectionFailed
     case malformedResponse
+    case requestTimedOut
 
     var errorDescription: String? {
         switch self {
@@ -12,6 +15,7 @@ enum CodexUsageError: LocalizedError, Equatable {
         case .notSignedIn: "Codex is not signed in. Run codex login."
         case .connectionFailed: "Could not connect to Codex."
         case .malformedResponse: "Codex returned an unsupported usage response."
+        case .requestTimedOut: "Codex did not respond in time."
         }
     }
 }
@@ -138,19 +142,152 @@ enum CodexRequestEncoder {
     }
 }
 
+private final class CodexLineReader: @unchecked Sendable {
+    private typealias Waiter = (
+        id: UUID,
+        continuation: CheckedContinuation<Data, any Error>
+    )
+
+    private static let maximumBufferSize = 1_048_576
+
+    private let queue = DispatchQueue(label: "CodexLineReader")
+    private let source: DispatchSourceRead
+    private let descriptor: Int32
+    private var buffer = Data()
+    private var waiter: Waiter?
+    private var cancelledWaiters: Set<UUID> = []
+    private var terminalError: CodexUsageError?
+
+    init(output: FileHandle) {
+        descriptor = Int32(output.fileDescriptor)
+        source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: queue)
+
+        let flags = fcntl(descriptor, F_GETFL)
+        if flags >= 0 {
+            _ = fcntl(descriptor, F_SETFL, flags | O_NONBLOCK)
+        }
+
+        source.setEventHandler { [weak self] in
+            self?.readAvailableBytes()
+        }
+        source.resume()
+    }
+
+    func nextLine() async throws -> Data {
+        let id = UUID()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                queue.async { [weak self] in
+                    guard let self else {
+                        continuation.resume(throwing: CodexUsageError.connectionFailed)
+                        return
+                    }
+                    self.register(id: id, continuation: continuation)
+                }
+            }
+        } onCancel: {
+            self.queue.async { [weak self] in
+                self?.cancelWaiter(id: id)
+            }
+        }
+    }
+
+    func cancel() {
+        queue.sync {
+            finish(with: .connectionFailed)
+        }
+    }
+
+    private func register(
+        id: UUID,
+        continuation: CheckedContinuation<Data, any Error>
+    ) {
+        if cancelledWaiters.remove(id) != nil {
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        if let terminalError {
+            continuation.resume(throwing: terminalError)
+            return
+        }
+        guard waiter == nil else {
+            continuation.resume(throwing: CodexUsageError.connectionFailed)
+            return
+        }
+        waiter = (id, continuation)
+        deliverBufferedLineIfPossible()
+    }
+
+    private func cancelWaiter(id: UUID) {
+        guard waiter?.id == id else {
+            cancelledWaiters.insert(id)
+            return
+        }
+        let continuation = waiter?.continuation
+        waiter = nil
+        continuation?.resume(throwing: CancellationError())
+    }
+
+    private func readAvailableBytes() {
+        guard terminalError == nil else { return }
+
+        var bytes = [UInt8](repeating: 0, count: 8_192)
+        let count = bytes.withUnsafeMutableBufferPointer {
+            Darwin.read(descriptor, $0.baseAddress, $0.count)
+        }
+        if count > 0 {
+            buffer.append(contentsOf: bytes.prefix(Int(count)))
+            guard buffer.count <= Self.maximumBufferSize else {
+                finish(with: .malformedResponse)
+                return
+            }
+            deliverBufferedLineIfPossible()
+        } else if count == 0 {
+            finish(with: .connectionFailed)
+        } else if errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR {
+            finish(with: .connectionFailed)
+        }
+    }
+
+    private func deliverBufferedLineIfPossible() {
+        guard let waiter else { return }
+        while let newline = buffer.firstIndex(of: 0x0A) {
+            let line = Data(buffer[..<newline])
+            buffer.removeSubrange(...newline)
+            guard !line.isEmpty else { continue }
+
+            self.waiter = nil
+            waiter.continuation.resume(returning: line)
+            return
+        }
+    }
+
+    private func finish(with error: CodexUsageError) {
+        guard terminalError == nil else { return }
+        terminalError = error
+        source.cancel()
+        let continuation = waiter?.continuation
+        waiter = nil
+        continuation?.resume(throwing: error)
+    }
+}
+
 actor CodexUsageAPI {
     private let suppliedExecutableURL: URL?
+    private let requestTimeout: Duration
     private var process: Process?
     private var stdinPipe: Pipe?
     private var stdoutPipe: Pipe?
     private var input: FileHandle?
     private var output: FileHandle?
-    private var readBuffer = Data()
+    private var lineReader: CodexLineReader?
     private var nextID = 1
     private var activeFetch: (id: UUID, task: Task<Usage, Error>)?
 
-    init(executableURL: URL? = nil) {
+    init(executableURL: URL? = nil, requestTimeout: Duration = .seconds(8)) {
         suppliedExecutableURL = executableURL
+        self.requestTimeout = requestTimeout
     }
 
     func fetch() async throws -> Usage {
@@ -187,14 +324,31 @@ actor CodexUsageAPI {
         do {
             return try await fetchOnce()
         } catch {
+            let firstError = Self.codexError(from: error)
+            guard Self.shouldRetry(firstError) else { throw firstError }
             stop()
             do {
                 return try await fetchOnce()
-            } catch let retryError as CodexUsageError {
-                throw retryError
             } catch {
-                throw CodexUsageError.connectionFailed
+                let retryError = Self.codexError(from: error)
+                if Self.shouldRetry(retryError) {
+                    stop()
+                }
+                throw retryError
             }
+        }
+    }
+
+    private static func codexError(from error: any Error) -> CodexUsageError {
+        error as? CodexUsageError ?? .connectionFailed
+    }
+
+    private static func shouldRetry(_ error: CodexUsageError) -> Bool {
+        switch error {
+        case .cliNotFound, .notSignedIn:
+            false
+        case .connectionFailed, .malformedResponse, .requestTimedOut:
+            true
         }
     }
 
@@ -215,14 +369,22 @@ actor CodexUsageAPI {
         process.standardInput = stdin
         process.standardOutput = stdout
         process.standardError = FileHandle.nullDevice
-        try process.run()
+        do {
+            try process.run()
+        } catch {
+            stdin.fileHandleForReading.closeFile()
+            stdin.fileHandleForWriting.closeFile()
+            stdout.fileHandleForReading.closeFile()
+            stdout.fileHandleForWriting.closeFile()
+            throw CodexUsageError.connectionFailed
+        }
 
         self.process = process
         stdinPipe = stdin
         stdoutPipe = stdout
         input = stdin.fileHandleForWriting
         output = stdout.fileHandleForReading
-        readBuffer.removeAll(keepingCapacity: true)
+        lineReader = CodexLineReader(output: stdout.fileHandleForReading)
         process.terminationHandler = { [weak self] terminatedProcess in
             Task { [weak self] in
                 await self?.handleTermination(of: terminatedProcess)
@@ -244,36 +406,40 @@ actor CodexUsageAPI {
     private func write(id: Int, method: String, params: [String: Any]) throws {
         guard let input else { throw CodexUsageError.connectionFailed }
         let data = try CodexRequestEncoder.encode(id: id, method: method, params: params)
-        try input.write(contentsOf: data)
+        do {
+            try input.write(contentsOf: data)
+        } catch {
+            throw CodexUsageError.connectionFailed
+        }
     }
 
     private func request(id: Int, method: String, params: [String: Any]) async throws -> Data {
         try write(id: id, method: method, params: params)
-        while true {
-            let line = try await readLine()
-            guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
-                continue
+        guard let lineReader else { throw CodexUsageError.connectionFailed }
+
+        return try await withThrowingTaskGroup(of: Data.self) { group in
+            group.addTask {
+                try await Self.response(id: id, from: lineReader)
             }
-            if (object["id"] as? Int) == id { return line }
+            group.addTask { [requestTimeout] in
+                try await Task.sleep(for: requestTimeout)
+                throw CodexUsageError.requestTimedOut
+            }
+            defer { group.cancelAll() }
+            guard let response = try await group.next() else {
+                throw CodexUsageError.connectionFailed
+            }
+            return response
         }
     }
 
-    private func readLine() async throws -> Data {
+    private static func response(id: Int, from lineReader: CodexLineReader) async throws -> Data {
         while true {
-            if let newline = readBuffer.firstIndex(of: 0x0A) {
-                let line = Data(readBuffer[..<newline])
-                readBuffer.removeSubrange(...newline)
-                if !line.isEmpty { return line }
-            }
-            guard readBuffer.count <= 1_048_576 else {
+            let line = try await lineReader.nextLine()
+            guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
                 throw CodexUsageError.malformedResponse
             }
-            guard let output else { throw CodexUsageError.connectionFailed }
-            let chunk = try await Task.detached {
-                try output.read(upToCount: 1) ?? Data()
-            }.value
-            guard !chunk.isEmpty else { throw CodexUsageError.connectionFailed }
-            readBuffer.append(chunk)
+            if (object["id"] as? Int) == id { return line }
         }
     }
 
@@ -297,7 +463,8 @@ actor CodexUsageAPI {
             stdoutPipe = nil
             input = nil
             output = nil
-            readBuffer.removeAll(keepingCapacity: false)
+            lineReader?.cancel()
+            lineReader = nil
             return
         }
         if process.isRunning { process.terminate() }
@@ -310,6 +477,8 @@ actor CodexUsageAPI {
 
     private func clearState(for terminatedProcess: Process) {
         guard process === terminatedProcess else { return }
+        lineReader?.cancel()
+        lineReader = nil
         input?.closeFile()
         output?.closeFile()
         stdinPipe = nil
@@ -317,6 +486,5 @@ actor CodexUsageAPI {
         process = nil
         input = nil
         output = nil
-        readBuffer.removeAll(keepingCapacity: false)
     }
 }
