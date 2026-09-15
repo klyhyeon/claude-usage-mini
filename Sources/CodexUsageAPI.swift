@@ -125,3 +125,159 @@ enum CodexExecutableResolver {
         return (pathCandidates + fixedCandidates).first { isExecutable($0.path) }
     }
 }
+
+enum CodexRequestEncoder {
+    static func encode(id: Int, method: String, params: [String: Any]) throws -> Data {
+        var data = try JSONSerialization.data(withJSONObject: [
+            "id": id,
+            "method": method,
+            "params": params,
+        ])
+        data.append(0x0A)
+        return data
+    }
+}
+
+actor CodexUsageAPI {
+    private let suppliedExecutableURL: URL?
+    private var process: Process?
+    private var input: FileHandle?
+    private var output: FileHandle?
+    private var readBuffer = Data()
+    private var nextID = 1
+
+    init(executableURL: URL? = nil) {
+        suppliedExecutableURL = executableURL
+    }
+
+    func fetch() async throws -> Usage {
+        do {
+            return try await fetchOnce()
+        } catch {
+            stop()
+            do {
+                return try await fetchOnce()
+            } catch let retryError as CodexUsageError {
+                throw retryError
+            } catch {
+                throw CodexUsageError.connectionFailed
+            }
+        }
+    }
+
+    private func startIfNeeded() async throws {
+        if process?.isRunning == true { return }
+        if let process {
+            clearState(for: process)
+        }
+        guard let executable = suppliedExecutableURL ?? CodexExecutableResolver.resolve() else {
+            throw CodexUsageError.cliNotFound
+        }
+
+        let process = Process()
+        let stdin = Pipe()
+        let stdout = Pipe()
+        process.executableURL = executable
+        process.arguments = ["app-server", "--stdio"]
+        process.standardInput = stdin
+        process.standardOutput = stdout
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+
+        self.process = process
+        input = stdin.fileHandleForWriting
+        output = stdout.fileHandleForReading
+        readBuffer.removeAll(keepingCapacity: true)
+        process.terminationHandler = { [weak self] terminatedProcess in
+            Task { [weak self] in
+                await self?.handleTermination(of: terminatedProcess)
+            }
+        }
+
+        let initialize = try await request(
+            id: 0,
+            method: "initialize",
+            params: ["clientInfo": ["name": "claude-usage-mini", "version": "0.1.0"]]
+        )
+        guard let initializeResponse = try JSONSerialization.jsonObject(with: initialize) as? [String: Any],
+              initializeResponse["result"] != nil,
+              initializeResponse["error"] == nil else {
+            throw CodexUsageError.connectionFailed
+        }
+    }
+
+    private func write(id: Int, method: String, params: [String: Any]) throws {
+        guard let input else { throw CodexUsageError.connectionFailed }
+        let data = try CodexRequestEncoder.encode(id: id, method: method, params: params)
+        try input.write(contentsOf: data)
+    }
+
+    private func request(id: Int, method: String, params: [String: Any]) async throws -> Data {
+        try write(id: id, method: method, params: params)
+        while true {
+            let line = try await readLine()
+            guard let object = try JSONSerialization.jsonObject(with: line) as? [String: Any] else {
+                continue
+            }
+            if (object["id"] as? Int) == id { return line }
+        }
+    }
+
+    private func readLine() async throws -> Data {
+        while true {
+            if let newline = readBuffer.firstIndex(of: 0x0A) {
+                let line = Data(readBuffer[..<newline])
+                readBuffer.removeSubrange(...newline)
+                if !line.isEmpty { return line }
+            }
+            guard readBuffer.count <= 1_048_576 else {
+                throw CodexUsageError.malformedResponse
+            }
+            guard let output else { throw CodexUsageError.connectionFailed }
+            let chunk = try await Task.detached {
+                try output.read(upToCount: 8_192) ?? Data()
+            }.value
+            guard !chunk.isEmpty else { throw CodexUsageError.connectionFailed }
+            readBuffer.append(chunk)
+        }
+    }
+
+    private func fetchOnce() async throws -> Usage {
+        try await startIfNeeded()
+        let id = nextID
+        nextID += 1
+        let data = try await request(
+            id: id,
+            method: "account/rateLimits/read",
+            params: ["excludeResetCreditDetails": true]
+        )
+        return try CodexUsageParser.parseResponse(data)
+    }
+
+    private func stop() {
+        guard let process else {
+            input?.closeFile()
+            output?.closeFile()
+            input = nil
+            output = nil
+            readBuffer.removeAll(keepingCapacity: false)
+            return
+        }
+        if process.isRunning { process.terminate() }
+        clearState(for: process)
+    }
+
+    private func handleTermination(of terminatedProcess: Process) {
+        clearState(for: terminatedProcess)
+    }
+
+    private func clearState(for terminatedProcess: Process) {
+        guard process === terminatedProcess else { return }
+        input?.closeFile()
+        output?.closeFile()
+        process = nil
+        input = nil
+        output = nil
+        readBuffer.removeAll(keepingCapacity: false)
+    }
+}

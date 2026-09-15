@@ -74,4 +74,35 @@ do {
     preconditionFailure("authentication errors should become notSignedIn")
 } catch CodexUsageError.notSignedIn {}
 
+let fakeHome = URL(fileURLWithPath: "/Users/example")
+let resolved = CodexExecutableResolver.resolve(
+    environmentPath: "/bin:/custom/bin",
+    homeDirectory: fakeHome,
+    isExecutable: { $0 == "/Users/example/.local/bin/codex" }
+)
+precondition(resolved?.path == "/Users/example/.local/bin/codex")
+
+let pathResolved = CodexExecutableResolver.resolve(
+    environmentPath: "/bin:/custom/bin",
+    homeDirectory: fakeHome,
+    isExecutable: { $0 == "/custom/bin/codex" }
+)
+precondition(pathResolved?.path == "/custom/bin/codex")
+
+let malformed = #"{"id":9,"result":{"unexpected":true}}"#.data(using: .utf8)!
+do {
+    _ = try CodexUsageParser.parseResponse(malformed, fetchedAt: fetchedAt)
+    preconditionFailure("malformed result should fail")
+} catch CodexUsageError.malformedResponse {}
+
+let encodedRequest = try CodexRequestEncoder.encode(
+    id: 7,
+    method: "account/rateLimits/read",
+    params: ["excludeResetCreditDetails": true]
+)
+precondition(encodedRequest.last == 0x0A, "JSON-RPC requests need newline framing")
+let encodedObject = try JSONSerialization.jsonObject(with: Data(encodedRequest.dropLast())) as? [String: Any]
+precondition(encodedObject?["id"] as? Int == 7)
+precondition(encodedObject?["method"] as? String == "account/rateLimits/read")
+
 print("parse check OK")
