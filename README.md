@@ -15,8 +15,8 @@ Session, All models, and per-model cards.
 
 ## Features
 
-- **Fable usage** — the weekly per-model limit most trackers miss, shown in the
-  label and the popup
+- **Fable usage** — the weekly per-model Claude limit most trackers miss, shown
+  in the Claude popover and cards
 - **Sign in inside the app** (WKWebView / WebView2) — the `sessionKey` cookie is
   captured automatically, Google SSO supported; no copying cookies from DevTools
 - **60-second polling** of `claude.ai/api/organizations/{id}/usage`, preferring
