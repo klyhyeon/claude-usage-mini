@@ -141,16 +141,49 @@ enum CodexRequestEncoder {
 actor CodexUsageAPI {
     private let suppliedExecutableURL: URL?
     private var process: Process?
+    private var stdinPipe: Pipe?
+    private var stdoutPipe: Pipe?
     private var input: FileHandle?
     private var output: FileHandle?
     private var readBuffer = Data()
     private var nextID = 1
+    private var activeFetch: (id: UUID, task: Task<Usage, Error>)?
 
     init(executableURL: URL? = nil) {
         suppliedExecutableURL = executableURL
     }
 
     func fetch() async throws -> Usage {
+        if let activeFetch {
+            return try await awaitFetch(id: activeFetch.id, task: activeFetch.task)
+        }
+
+        let id = UUID()
+        let task = Task { [weak self] in
+            guard let self else { throw CodexUsageError.connectionFailed }
+            return try await self.fetchWithRetry()
+        }
+        activeFetch = (id, task)
+        return try await awaitFetch(id: id, task: task)
+    }
+
+    private func awaitFetch(id: UUID, task: Task<Usage, Error>) async throws -> Usage {
+        do {
+            let usage = try await task.value
+            clearActiveFetch(id: id)
+            return usage
+        } catch {
+            clearActiveFetch(id: id)
+            throw error
+        }
+    }
+
+    private func clearActiveFetch(id: UUID) {
+        guard activeFetch?.id == id else { return }
+        activeFetch = nil
+    }
+
+    private func fetchWithRetry() async throws -> Usage {
         do {
             return try await fetchOnce()
         } catch {
@@ -185,6 +218,8 @@ actor CodexUsageAPI {
         try process.run()
 
         self.process = process
+        stdinPipe = stdin
+        stdoutPipe = stdout
         input = stdin.fileHandleForWriting
         output = stdout.fileHandleForReading
         readBuffer.removeAll(keepingCapacity: true)
@@ -235,7 +270,7 @@ actor CodexUsageAPI {
             }
             guard let output else { throw CodexUsageError.connectionFailed }
             let chunk = try await Task.detached {
-                try output.read(upToCount: 8_192) ?? Data()
+                try output.read(upToCount: 1) ?? Data()
             }.value
             guard !chunk.isEmpty else { throw CodexUsageError.connectionFailed }
             readBuffer.append(chunk)
@@ -258,6 +293,8 @@ actor CodexUsageAPI {
         guard let process else {
             input?.closeFile()
             output?.closeFile()
+            stdinPipe = nil
+            stdoutPipe = nil
             input = nil
             output = nil
             readBuffer.removeAll(keepingCapacity: false)
@@ -275,6 +312,8 @@ actor CodexUsageAPI {
         guard process === terminatedProcess else { return }
         input?.closeFile()
         output?.closeFile()
+        stdinPipe = nil
+        stdoutPipe = nil
         process = nil
         input = nil
         output = nil

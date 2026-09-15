@@ -1,4 +1,11 @@
+import Darwin
+import Dispatch
 import Foundation
+
+if CommandLine.arguments.dropFirst() == ["app-server", "--stdio"] {
+    FakeCodexAppServer.run()
+    exit(0)
+}
 
 // Shape taken from a real claude.ai /usage response, with the numbers changed.
 let json: [String: Any] = [
@@ -105,4 +112,202 @@ let encodedObject = try JSONSerialization.jsonObject(with: Data(encodedRequest.d
 precondition(encodedObject?["id"] as? Int == 7)
 precondition(encodedObject?["method"] as? String == "account/rateLimits/read")
 
+try await checkConcurrentCodexFetches()
+
 print("parse check OK")
+
+private func checkConcurrentCodexFetches() async throws {
+    let executable = URL(
+        fileURLWithPath: CommandLine.arguments[0],
+        relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    ).standardizedFileURL
+    let logURL = executable.deletingLastPathComponent()
+        .appendingPathComponent("codex-usage-concurrency.log")
+    try? FileManager.default.removeItem(at: logURL)
+    FileManager.default.createFile(atPath: logURL.path, contents: Data())
+    defer {
+        try? FileManager.default.removeItem(at: logURL)
+    }
+
+    let timeout = DispatchWorkItem {
+        fputs("concurrent Codex fetch check timed out\n", stderr)
+        exit(1)
+    }
+    DispatchQueue.global().asyncAfter(deadline: .now() + 2, execute: timeout)
+    defer { timeout.cancel() }
+
+    let api = CodexUsageAPI(executableURL: executable)
+
+    let initial = try await api.fetch()
+    precondition(initial.limits.first?.percent == 17, "initial fake response was not parsed")
+
+    do {
+        async let first = api.fetch()
+        async let second = api.fetch()
+        let (firstUsage, secondUsage) = try await (first, second)
+        precondition(firstUsage.limits.first?.percent == 17)
+        precondition(secondUsage.limits.first?.percent == 17)
+    } catch {
+        preconditionFailure("concurrent fetches must complete together: \(error)")
+    }
+
+    let events = try String(contentsOf: logURL, encoding: .utf8)
+        .split(separator: "\n")
+        .map(String.init)
+    precondition(events == ["initialize", "rate", "rate"], "overlapping requests: \(events)")
+}
+
+private enum FakeCodexAppServer {
+    static func run() {
+        signal(SIGPIPE, SIG_IGN)
+        let input = FileHandle.standardInput
+        var readBuffer = Data()
+
+        guard let initialize = readLine(from: input, buffer: &readBuffer),
+              isRequest(initialize, id: 0, method: "initialize") else {
+            exit(1)
+        }
+        appendLog("initialize")
+        let emptyObject: [String: Any] = [:]
+        var initializeResponses = encodedLine([
+            "method": "remoteControl/status/changed",
+            "params": emptyObject,
+        ])
+        initializeResponses.append(encodedLine(["id": 0, "result": emptyObject]))
+        send(initializeResponses)
+
+        guard let initialRate = readLine(from: input, buffer: &readBuffer),
+              let initialID = requestID(initialRate),
+              isRequest(initialRate, id: initialID, method: "account/rateLimits/read") else {
+            exit(1)
+        }
+        appendLog("rate")
+        writeRateLimitResponse(id: initialID)
+
+        guard let concurrentRate = readLine(from: input, buffer: &readBuffer),
+              let concurrentID = requestID(concurrentRate),
+              isRequest(concurrentRate, id: concurrentID, method: "account/rateLimits/read") else {
+            exit(1)
+        }
+        appendLog("rate")
+        Thread.sleep(forTimeInterval: 0.2)
+        let hasOverlap = hasAdditionalLine(from: input, buffer: &readBuffer)
+        if hasOverlap {
+            appendLog("overlap")
+        }
+        writeRateLimitResponse(id: concurrentID)
+
+        if hasOverlap,
+           let overlappingRate = readLine(from: input, buffer: &readBuffer),
+           let overlappingID = requestID(overlappingRate),
+           isRequest(overlappingRate, id: overlappingID, method: "account/rateLimits/read") {
+            appendLog("rate")
+            writeRateLimitResponse(id: overlappingID)
+        }
+
+        while let rate = readLine(from: input, buffer: &readBuffer),
+              let id = requestID(rate),
+              isRequest(rate, id: id, method: "account/rateLimits/read") {
+            appendLog("rate")
+            writeRateLimitResponse(id: id)
+        }
+    }
+
+    private static func readLine(from input: FileHandle, buffer: inout Data) -> Data? {
+        while true {
+            if let newline = buffer.firstIndex(of: 0x0A) {
+                let line = Data(buffer[..<newline])
+                buffer.removeSubrange(...newline)
+                if !line.isEmpty { return line }
+            }
+            var bytes = [UInt8](repeating: 0, count: 8_192)
+            let count = bytes.withUnsafeMutableBufferPointer {
+                Darwin.read(Int32(input.fileDescriptor), $0.baseAddress, $0.count)
+            }
+            guard count > 0 else { return nil }
+            buffer.append(contentsOf: bytes.prefix(Int(count)))
+        }
+    }
+
+    private static func hasAdditionalLine(from input: FileHandle, buffer: inout Data) -> Bool {
+        if buffer.contains(0x0A) { return true }
+
+        var descriptor = pollfd(
+            fd: Int32(input.fileDescriptor),
+            events: Int16(POLLIN),
+            revents: 0
+        )
+        guard poll(&descriptor, 1, 0) > 0 else { return false }
+
+        var bytes = [UInt8](repeating: 0, count: 8_192)
+        let count = bytes.withUnsafeMutableBufferPointer {
+            read(Int32(input.fileDescriptor), $0.baseAddress, $0.count)
+        }
+        guard count > 0 else { return false }
+        buffer.append(contentsOf: bytes.prefix(Int(count)))
+        return buffer.contains(0x0A)
+    }
+
+    private static func isRequest(_ data: Data, id: Int, method: String) -> Bool {
+        guard let decoded = try? JSONSerialization.jsonObject(with: data),
+              let object = decoded as? [String: Any] else {
+            return false
+        }
+        return object["id"] as? Int == id && object["method"] as? String == method
+    }
+
+    private static func requestID(_ data: Data) -> Int? {
+        guard let decoded = try? JSONSerialization.jsonObject(with: data),
+              let object = decoded as? [String: Any] else {
+            return nil
+        }
+        return object["id"] as? Int
+    }
+
+    private static func send(_ data: Data) {
+        let count = data.withUnsafeBytes { bytes in
+            Darwin.write(STDOUT_FILENO, bytes.baseAddress, bytes.count)
+        }
+        guard count == data.count else {
+            appendLog("send-failed-\(errno)")
+            exit(1)
+        }
+    }
+
+    private static func encodedLine(_ object: [String: Any]) -> Data {
+        var data = try! JSONSerialization.data(withJSONObject: object)
+        data.append(0x0A)
+        return data
+    }
+
+    private static func writeRateLimitResponse(id: Int) {
+        send(encodedLine([
+            "id": id,
+            "result": [
+                "rateLimits": [
+                    "limitId": "codex",
+                    "primary": [
+                        "usedPercent": 17,
+                        "windowDurationMins": 10_080,
+                        "resetsAt": 1_789_954_384,
+                    ],
+                    "secondary": NSNull(),
+                    "individualLimit": NSNull(),
+                ],
+                "rateLimitsByLimitId": NSNull(),
+            ],
+        ]))
+    }
+
+    private static func appendLog(_ event: String) {
+        let logURL = URL(fileURLWithPath: CommandLine.arguments[0])
+            .deletingLastPathComponent()
+            .appendingPathComponent("codex-usage-concurrency.log")
+        guard let log = FileHandle(forWritingAtPath: logURL.path) else {
+            exit(1)
+        }
+        defer { log.closeFile() }
+        log.seekToEndOfFile()
+        try! log.write(contentsOf: Data("\(event)\n".utf8))
+    }
+}
