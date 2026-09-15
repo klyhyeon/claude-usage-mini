@@ -1,4 +1,5 @@
 .build/
+.worktrees/
 *.app/
 .DS_Store
 windows/**/bin/
