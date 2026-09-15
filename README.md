@@ -1,15 +1,17 @@
 # Claude Usage Mini
 
 A lightweight menu bar (macOS) and system-tray (Windows) app that shows your
-Claude AI usage limits in real time — session, weekly, and per-model usage
-including **Fable**. Built native on each platform, no Electron.
+AI usage limits in real time. On macOS, the app displays Codex usage in the
+menu bar and shows both Codex and Claude usage in the popover. Windows remains
+a Claude-only system-tray application. Built native on each platform, no
+Electron.
 
 - **macOS** — SwiftUI menu bar app, buildable with Command Line Tools only (no Xcode).
 - **Windows** — .NET 8 / WPF system-tray app.
 
-The label reads `25%(1%) · 2:00pm` — session usage, Fable weekly usage, and the
-session reset time. Click it for a card per limit (session / all models /
-per-model weekly) with progress bars and reset times.
+On macOS, the label reads `C 62%(0%)` — Codex weekly usage and monthly usage.
+Click it for Codex Weekly and Monthly cards followed by the existing Claude
+Session, All models, and per-model cards.
 
 ## Features
 
@@ -40,8 +42,14 @@ open "Claude Usage Mini.app"
 
 Requires macOS 14+ and Command Line Tools (`xcode-select --install`). No Xcode.
 
-Click the menu bar item → **Sign In** → sign in to claude.ai once. Usage appears
-within a few seconds and refreshes every 60 seconds.
+- Install and sign in to the Codex CLI (`codex login`). The app reads usage
+  through `codex app-server`; it does not read `~/.codex/auth.json`.
+- Sign in to Claude from the popover to populate the Claude detail section.
+- Codex and Claude refresh independently every 60 seconds.
+
+Click the menu bar item → **Sign In** → sign in to claude.ai once. Claude usage
+appears within a few seconds. Codex usage is available after the Codex CLI is
+signed in.
 
 ### Debugging
 
@@ -113,6 +121,9 @@ segments while it is under 5 minutes old.
 - This is an **unofficial** client of claude.ai's internal web API; the response
   shape can change without notice. The parser handles both the legacy
   `seven_day_*` fields and the newer `limits[]` array.
+- The Codex `app-server` contract is supplied by the locally installed Codex
+  CLI. If that protocol evolves, update the CLI to the compatible version; the
+  app does not bundle the protocol.
 - Not affiliated with Anthropic.
 
 ## License
