@@ -5,15 +5,29 @@ struct PopoverView: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            if let usage = model.usage, !usage.limits.isEmpty {
-                ForEach(usage.limits) { LimitCard(limit: $0) }
-            } else if !model.hasSessionKey {
-                SessionKeyPrompt(model: model)
-            } else if let error = model.error {
-                MessageCard(text: error)
-                Button("Sign In Again") { model.signIn() }
-            } else {
-                MessageCard(text: model.isLoading ? "Loading usage…" : "No usage reported yet.")
+            VStack(spacing: 10) {
+                ProviderHeading(title: "Codex")
+                if let usage = model.codexUsage {
+                    ForEach(usage.limits) { LimitCard(limit: $0) }
+                } else if model.codexError == nil {
+                    MessageCard(text: model.isLoading ? "Loading Codex usage…" : "No Codex usage reported yet.")
+                }
+                if let error = model.codexError {
+                    MessageCard(text: error)
+                }
+
+                ProviderHeading(title: "Claude")
+                if let usage = model.claudeUsage, !usage.limits.isEmpty {
+                    ForEach(usage.limits) { LimitCard(limit: $0) }
+                    if let error = model.claudeError { MessageCard(text: error) }
+                } else if !model.hasSessionKey {
+                    SessionKeyPrompt(model: model)
+                } else if let error = model.claudeError {
+                    MessageCard(text: error)
+                    Button("Sign In Again") { model.signIn() }
+                } else {
+                    MessageCard(text: model.isLoading ? "Loading Claude usage…" : "No Claude usage reported yet.")
+                }
             }
 
             Footer(model: model)
@@ -22,6 +36,18 @@ struct PopoverView: View {
         .frame(width: 300)
         .background(Theme.panel)
         .preferredColorScheme(.dark)
+    }
+}
+
+private struct ProviderHeading: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Theme.dim)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 2)
     }
 }
 
@@ -169,7 +195,7 @@ private struct Footer: View {
 
     var body: some View {
         HStack {
-            if let fetchedAt = model.usage?.fetchedAt {
+            if let fetchedAt = model.latestFetchedAt {
                 Text("Updated \(fetchedAt.formatted(.dateTime.hour().minute()))")
                     .font(.system(size: 10))
                     .foregroundStyle(Theme.faint)

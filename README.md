@@ -1,20 +1,23 @@
 # Claude Usage Mini
 
 A lightweight menu bar (macOS) and system-tray (Windows) app that shows your
-Claude AI usage limits in real time — session, weekly, and per-model usage
-including **Fable**. Built native on each platform, no Electron.
+AI usage limits in real time. On macOS, the app displays Codex usage in the
+menu bar and shows both Codex and Claude usage in the popover. Windows remains
+a Claude-only system-tray application. Built native on each platform, no
+Electron.
 
 - **macOS** — SwiftUI menu bar app, buildable with Command Line Tools only (no Xcode).
 - **Windows** — .NET 8 / WPF system-tray app.
 
-The label reads `25%(1%) · 2:00pm` — session usage, Fable weekly usage, and the
-session reset time. Click it for a card per limit (session / all models /
-per-model weekly) with progress bars and reset times.
+On macOS, the label reads `C 62%(0%)` — Codex weekly usage and monthly usage
+when available. Click it for the Codex Weekly card, the Monthly card when
+available, and then the existing Claude Session, All models, and per-model
+cards.
 
 ## Features
 
-- **Fable usage** — the weekly per-model limit most trackers miss, shown in the
-  label and the popup
+- **Fable usage** — the weekly per-model Claude limit most trackers miss, shown
+  in the Claude popover and cards
 - **Sign in inside the app** (WKWebView / WebView2) — the `sessionKey` cookie is
   captured automatically, Google SSO supported; no copying cookies from DevTools
 - **60-second polling** of `claude.ai/api/organizations/{id}/usage`, preferring
@@ -29,19 +32,71 @@ per-model weekly) with progress bars and reset times.
 
 ## macOS
 
-### Build & run
+### 1. Prerequisites
+
+- macOS 14 or later.
+- Apple Command Line Tools with Swift 6 or later; the full Xcode app is not required.
+  If the tools are missing, run `xcode-select --install` and finish the installer
+  before continuing. Check the compiler with `swift --version`.
+- The Codex CLI installed and signed in. In Terminal, run `codex login` before
+  launching the widget. The widget reads usage through `codex app-server`.
+
+### 2. Build and start
+
+Open Terminal and run:
 
 ```bash
 git clone https://github.com/klyhyeon/claude-usage-mini.git
 cd claude-usage-mini
-./build.sh                    # swift build + .app bundle + ad-hoc codesign
+./build.sh
 open "Claude Usage Mini.app"
 ```
 
-Requires macOS 14+ and Command Line Tools (`xcode-select --install`). No Xcode.
+If you already have the repository, `cd` into that folder and run the last two
+commands. `build.sh` compiles the release executable, creates the app bundle in
+that folder, and signs it locally.
 
-Click the menu bar item → **Sign In** → sign in to claude.ai once. Usage appears
-within a few seconds and refreshes every 60 seconds.
+Look in the **macOS menu bar at the top of the screen** for a label such as
+`C 56%(3%)`. This is a menu bar app: it does not open a main window or appear in
+the Dock. The first percentage is weekly usage; the percentage in parentheses
+is the monthly allowance when available.
+
+### 3. Connect accounts and use the widget
+
+- Click the menu bar label to see usage cards and reset times.
+- In the Claude section, click **Sign In** and complete the browser sign-in.
+  If the session expires, click **Sign In Again**.
+- The two providers refresh independently every 60 seconds. Click **Refresh**
+  to request an update immediately.
+- If the label shows `C —`, open the popover and read the error. Confirm the CLI
+  is installed and run `codex login` if it reports that you are not signed in.
+- Click **Quit** at the bottom of the popover to stop the widget.
+
+The app attempts to register itself to launch at login on its first run.
+Manage its permission in **System Settings → General → Login Items**. Keep the
+app bundle in a stable location so its login registration can find it.
+
+### Start again or update
+
+To start an already-built widget, double-click **Claude Usage Mini.app** in
+Finder, or run this from the repository folder:
+
+```bash
+open "Claude Usage Mini.app"
+```
+
+To update, first click **Quit** in the running widget, then run these commands
+from your repository folder (with any local changes saved):
+
+```bash
+git switch main
+git pull --ff-only
+./build.sh
+open "Claude Usage Mini.app"
+```
+
+Rebuilding replaces the app bundle in the repository folder. Relaunch it to use
+the updated executable.
 
 ### Debugging
 
@@ -49,8 +104,8 @@ within a few seconds and refreshes every 60 seconds.
 CUM_DEBUG=1 "./Claude Usage Mini.app/Contents/MacOS/ClaudeUsageMini"
 ```
 
-prints each API request path and raw response body to stderr. `./check.sh` runs
-the parser self-check.
+prints each Claude API request path and raw response body to stderr. Codex
+app-server stderr is discarded. `./check.sh` runs the parser self-check.
 
 ---
 
@@ -113,6 +168,9 @@ segments while it is under 5 minutes old.
 - This is an **unofficial** client of claude.ai's internal web API; the response
   shape can change without notice. The parser handles both the legacy
   `seven_day_*` fields and the newer `limits[]` array.
+- The Codex `app-server` contract is supplied by the locally installed Codex
+  CLI. If that protocol evolves, update the CLI to the compatible version; the
+  app does not bundle the protocol.
 - Not affiliated with Anthropic.
 
 ## License
