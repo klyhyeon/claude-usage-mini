@@ -32,25 +32,71 @@ cards.
 
 ## macOS
 
-### Build & run
+### 1. Prerequisites
+
+- macOS 14 or later.
+- Apple Command Line Tools with Swift 6 or later; the full Xcode app is not required.
+  If the tools are missing, run `xcode-select --install` and finish the installer
+  before continuing. Check the compiler with `swift --version`.
+- The Codex CLI installed and signed in. In Terminal, run `codex login` before
+  launching the widget. The widget reads usage through `codex app-server`.
+
+### 2. Build and start
+
+Open Terminal and run:
 
 ```bash
 git clone https://github.com/klyhyeon/claude-usage-mini.git
 cd claude-usage-mini
-./build.sh                    # swift build + .app bundle + ad-hoc codesign
+./build.sh
 open "Claude Usage Mini.app"
 ```
 
-Requires macOS 14+ and Command Line Tools (`xcode-select --install`). No Xcode.
+If you already have the repository, `cd` into that folder and run the last two
+commands. `build.sh` compiles the release executable, creates the app bundle in
+that folder, and signs it locally.
 
-- Install and sign in to the Codex CLI (`codex login`). The app reads usage
-  through `codex app-server`; it does not read `~/.codex/auth.json`.
-- Sign in to Claude from the popover to populate the Claude detail section.
-- Codex and Claude refresh independently every 60 seconds.
+Look in the **macOS menu bar at the top of the screen** for a label such as
+`C 56%(3%)`. This is a menu bar app: it does not open a main window or appear in
+the Dock. The first percentage is weekly usage; the percentage in parentheses
+is the monthly allowance when available.
 
-Click the menu bar item → **Sign In** → sign in to claude.ai once. Claude usage
-appears within a few seconds. Codex usage is available after the Codex CLI is
-signed in.
+### 3. Connect accounts and use the widget
+
+- Click the menu bar label to see usage cards and reset times.
+- In the Claude section, click **Sign In** and complete the browser sign-in.
+  If the session expires, click **Sign In Again**.
+- The two providers refresh independently every 60 seconds. Click **Refresh**
+  to request an update immediately.
+- If the label shows `C —`, open the popover and read the error. Confirm the CLI
+  is installed and run `codex login` if it reports that you are not signed in.
+- Click **Quit** at the bottom of the popover to stop the widget.
+
+The app attempts to register itself to launch at login on its first run.
+Manage its permission in **System Settings → General → Login Items**. Keep the
+app bundle in a stable location so its login registration can find it.
+
+### Start again or update
+
+To start an already-built widget, double-click **Claude Usage Mini.app** in
+Finder, or run this from the repository folder:
+
+```bash
+open "Claude Usage Mini.app"
+```
+
+To update, first click **Quit** in the running widget, then run these commands
+from your repository folder (with any local changes saved):
+
+```bash
+git switch main
+git pull --ff-only
+./build.sh
+open "Claude Usage Mini.app"
+```
+
+Rebuilding replaces the app bundle in the repository folder. Relaunch it to use
+the updated executable.
 
 ### Debugging
 
