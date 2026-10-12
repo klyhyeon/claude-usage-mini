@@ -42,6 +42,16 @@ enum CodexUsageParser {
 
         let windows = [bucket.primary, bucket.secondary].compactMap { $0 }
         var limits: [UsageLimit] = []
+        if let session = windows.first(where: { $0.windowDurationMins == 300 }) {
+            limits.append(UsageLimit(
+                id: "codex-session",
+                title: "Session Usage",
+                badge: nil,
+                subtitle: "5-hour window",
+                percent: clamp(session.usedPercent),
+                resetsAt: session.resetsAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+            ))
+        }
         if let weekly = windows.first(where: { $0.windowDurationMins == 10_080 }) {
             limits.append(UsageLimit(
                 id: "codex-weekly",

@@ -65,6 +65,44 @@ let weeklyOnly = try CodexUsageParser.parseResponse(weeklyOnlyJSON, fetchedAt: f
 precondition(weeklyOnly.limits.map(\.id) == ["codex-weekly"])
 precondition(CodexMenuLabel.make(from: weeklyOnly) == "C 41%")
 
+// Window duration, rather than primary/secondary position, determines the card.
+for sessionIsPrimary in [true, false] {
+    let session: [String: Any] = [
+        "usedPercent": 16, "windowDurationMins": 300, "resetsAt": 1_789_954_384,
+    ]
+    let weekly: [String: Any] = [
+        "usedPercent": 62, "windowDurationMins": 10_080, "resetsAt": NSNull(),
+    ]
+    let bucket: [String: Any] = [
+        "limitId": "codex",
+        "primary": sessionIsPrimary ? session : weekly,
+        "secondary": sessionIsPrimary ? weekly : session,
+        "individualLimit": ["remainingPercent": 100, "resetsAt": 1_790_812_800],
+    ]
+    let response = try JSONSerialization.data(withJSONObject: [
+        "result": ["rateLimits": bucket],
+    ])
+    let usage = try CodexUsageParser.parseResponse(response, fetchedAt: fetchedAt)
+    precondition(usage.limits.map(\.id) == ["codex-session", "codex-weekly", "codex-monthly"])
+    precondition(usage.limits[0].percent == 16)
+    precondition(usage.limits[0].resetsAt == Date(timeIntervalSince1970: 1_789_954_384))
+    precondition(CodexMenuLabel.make(from: usage) == "C 16% / 62%(0%)")
+}
+
+let sessionOnlyJSON = #"{"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":140,"windowDurationMins":300,"resetsAt":null}}}}"#.data(using: .utf8)!
+let sessionOnly = try CodexUsageParser.parseResponse(sessionOnlyJSON, fetchedAt: fetchedAt)
+precondition(sessionOnly.limits.map(\.id) == ["codex-session"])
+precondition(sessionOnly.limits[0].percent == 100)
+precondition(sessionOnly.limits[0].resetsAt == nil)
+precondition(CodexMenuLabel.make(from: sessionOnly) == "C 100%")
+
+let claudeLabelUsage = Usage(limits: UsageAPI.parse([
+    "five_hour": ["utilization": 16], "seven_day": ["utilization": 33],
+]), fetchedAt: fetchedAt)
+precondition(ClaudeMenuLabel.make(from: claudeLabelUsage) == "Cl 16% / 33%")
+precondition(ClaudeMenuLabel.make(from: nil) == "Cl —")
+precondition(ClaudeMenuLabel.make(from: Usage(limits: [], fetchedAt: fetchedAt)) == "Cl —")
+
 let clampedJSON = #"{"id":3,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":140,"windowDurationMins":10080,"resetsAt":null},"secondary":null,"individualLimit":{"limit":"1000","used":"2000","remainingPercent":-20,"resetsAt":1790812800}},"rateLimitsByLimitId":null}}"#.data(using: .utf8)!
 let clamped = try CodexUsageParser.parseResponse(clampedJSON, fetchedAt: fetchedAt)
 precondition(clamped.limits.allSatisfy { $0.percent == 100 })

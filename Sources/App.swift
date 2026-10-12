@@ -19,6 +19,14 @@ struct ClaudeUsageMiniApp: App {
 
 @MainActor
 final class UsageModel: ObservableObject {
+    enum Provider: String, CaseIterable {
+        case codex = "Codex"
+        case claude = "Claude"
+    }
+
+    @Published var selectedProvider: Provider {
+        didSet { UserDefaults.standard.set(selectedProvider.rawValue, forKey: "selectedProvider") }
+    }
     @Published private(set) var codexUsage: Usage?
     @Published private(set) var claudeUsage: Usage?
     @Published private(set) var codexError: String?
@@ -34,6 +42,8 @@ final class UsageModel: ObservableObject {
     private var timer: Timer?
 
     init() {
+        selectedProvider = UserDefaults.standard.string(forKey: "selectedProvider")
+            .flatMap(Provider.init(rawValue:)) ?? .codex
         LoginItem.enableIfUnset()
         Task { await refresh() }
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
@@ -42,15 +52,19 @@ final class UsageModel: ObservableObject {
     }
 
     var menuBarLabel: String {
-        CodexMenuLabel.make(from: codexUsage)
+        switch selectedProvider {
+        case .codex: CodexMenuLabel.make(from: codexUsage)
+        case .claude: ClaudeMenuLabel.make(from: claudeUsage)
+        }
     }
 
     var hasSessionKey: Bool { SessionKeyStore.read() != nil }
 
     var latestFetchedAt: Date? {
-        [codexUsage?.fetchedAt, claudeUsage?.fetchedAt]
-            .compactMap { $0 }
-            .max()
+        switch selectedProvider {
+        case .codex: codexUsage?.fetchedAt
+        case .claude: claudeUsage?.fetchedAt
+        }
     }
 
     func refresh() async {

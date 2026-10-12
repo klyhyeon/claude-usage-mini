@@ -1,21 +1,27 @@
 # Claude Usage Mini
 
 A lightweight menu bar (macOS) and system-tray (Windows) app that shows your
-AI usage limits in real time. On macOS, the app displays Codex usage in the
-menu bar and shows both Codex and Claude usage in the popover. Windows remains
+AI usage limits in real time. On macOS, choose Codex or Claude with the toggle
+in the popover to switch the usage cards and menu bar label. Windows remains
 a Claude-only system-tray application. Built native on each platform, no
 Electron.
 
 - **macOS** — SwiftUI menu bar app, buildable with Command Line Tools only (no Xcode).
 - **Windows** — .NET 8 / WPF system-tray app.
 
-On macOS, the label reads `C 62%(0%)` — Codex weekly usage and monthly usage
-when available. Click it for the Codex Weekly card, the Monthly card when
-available, and then the existing Claude Session, All models, and per-model
-cards.
+On macOS, the Codex label reads `C 16% / 62%(0%)` — 5-hour usage, weekly usage,
+and monthly usage in parentheses when available. Click it for usage cards and
+reset times. Switch to Claude for its Session, All models, and per-model cards;
+the Claude label reads `Cl 16% / 33%` for session and weekly usage. Your provider
+choice is saved between launches. Limits are shown only when the provider
+reports them; Codex accounts with only a weekly limit still show `C 62%`.
 
 ## Features
 
+- **Codex 5-hour usage on macOS** — session usage and reset time alongside
+  weekly and monthly limits when reported by your account
+- **Codex / Claude toggle on macOS** — switches the cards and menu bar label,
+  and remembers your choice between launches
 - **Fable usage** — the weekly per-model Claude limit most trackers miss, shown
   in the Claude popover and cards
 - **Sign in inside the app** (WKWebView / WebView2) — the `sessionKey` cookie is
@@ -57,17 +63,20 @@ commands. `build.sh` compiles the release executable, creates the app bundle in
 that folder, and signs it locally.
 
 Look in the **macOS menu bar at the top of the screen** for a label such as
-`C 56%(3%)`. This is a menu bar app: it does not open a main window or appear in
-the Dock. The first percentage is weekly usage; the percentage in parentheses
-is the monthly allowance when available.
+`C 16% / 56%(3%)`. This is a menu bar app: it does not open a main window or appear
+in the Dock. When both windows are reported, the percentages are 5-hour usage
+followed by weekly usage; parentheses show monthly usage when available.
 
 ### 3. Connect accounts and use the widget
 
 - Click the menu bar label to see usage cards and reset times.
-- In the Claude section, click **Sign In** and complete the browser sign-in.
+- Use the **Codex / Claude** toggle at the top to choose the provider shown in
+  the popover and menu bar.
+- Select **Claude**, click **Sign In**, and complete the browser sign-in.
   If the session expires, click **Sign In Again**.
 - The two providers refresh independently every 60 seconds. Click **Refresh**
-  to request an update immediately.
+  to request an update immediately. Both accounts keep refreshing regardless
+  of which provider is selected; the update time belongs to the selected provider.
 - If the label shows `C —`, open the popover and read the error. Confirm the CLI
   is installed and run `codex login` if it reports that you are not signed in.
 - Click **Quit** at the bottom of the popover to stop the widget.
