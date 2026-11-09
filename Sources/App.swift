@@ -30,6 +30,7 @@ final class UsageModel: ObservableObject {
     @Published private(set) var codexUsage: Usage?
     @Published private(set) var claudeUsage: Usage?
     @Published private(set) var codexError: String?
+    @Published private(set) var codexAccount: String?
     @Published private(set) var claudeError: String?
     @Published private(set) var isLoading = false
     @Published var sessionKeyDraft = ""
@@ -79,6 +80,7 @@ final class UsageModel: ObservableObject {
     }
 
     private func refreshCodex() async {
+        codexAccount = CodexAccountIdentity.label()
         do {
             codexUsage = try await codexAPI.fetch()
             codexError = nil

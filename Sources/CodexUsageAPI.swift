@@ -122,6 +122,68 @@ private struct IndividualLimit: Decodable {
     let resetsAt: Int
 }
 
+/// Which ChatGPT account the local Codex CLI is signed in as.
+/// `codex-use` swaps `~/.codex/auth.json`, so this is read fresh on every refresh.
+enum CodexAccountIdentity {
+    static func defaultHome(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        if let path = environment["CODEX_HOME"], !path.isEmpty {
+            return URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        }
+        return homeDirectory.appendingPathComponent(".codex")
+    }
+
+    /// Email from the id_token, falling back to account_id. nil when signed out.
+    static func current(home: URL = defaultHome()) -> String? {
+        guard let data = try? Data(contentsOf: home.appendingPathComponent("auth.json")) else {
+            return nil
+        }
+        return parse(authJSON: data)
+    }
+
+    static func parse(authJSON: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: authJSON) as? [String: Any],
+              let tokens = root["tokens"] as? [String: Any] else { return nil }
+        if let idToken = tokens["id_token"] as? String, let email = email(fromJWT: idToken) {
+            return email
+        }
+        return tokens["account_id"] as? String
+    }
+
+    static func email(fromJWT jwt: String) -> String? {
+        let parts = jwt.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        var base64 = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while base64.count % 4 != 0 { base64.append("=") }
+        guard let data = Data(base64Encoded: base64),
+              let claims = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return claims["email"] as? String
+    }
+
+    /// "<codex-use name> · <email>" when available, for the popover header.
+    static func label(home: URL = defaultHome()) -> String? {
+        let identity = current(home: home)
+        let rawName = try? String(
+            contentsOf: home.appendingPathComponent("accounts/.current"),
+            encoding: .utf8
+        )
+        let name = rawName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let profile = (name?.isEmpty ?? true) ? nil : name
+        switch (profile, identity) {
+        case let (profile?, identity?): return "\(profile) · \(identity)"
+        case let (profile?, nil): return profile
+        case let (nil, identity?): return identity
+        case (nil, nil): return nil
+        }
+    }
+}
+
 enum CodexExecutableResolver {
     static func resolve(
         environmentPath: String? = ProcessInfo.processInfo.environment["PATH"],
@@ -294,6 +356,9 @@ actor CodexUsageAPI {
     private var lineReader: CodexLineReader?
     private var nextID = 1
     private var activeFetch: (id: UUID, task: Task<Usage, Error>)?
+    /// Account the running app-server was started with. app-server loads auth once,
+    /// so a different account means the process has to be restarted.
+    private var runningIdentity: String?
 
     init(executableURL: URL? = nil, requestTimeout: Duration = .seconds(8)) {
         suppliedExecutableURL = executableURL
@@ -454,7 +519,12 @@ actor CodexUsageAPI {
     }
 
     private func fetchOnce() async throws -> Usage {
+        let identity = CodexAccountIdentity.current()
+        if process?.isRunning == true, identity != runningIdentity {
+            stop()
+        }
         try await startIfNeeded()
+        runningIdentity = identity
         let id = nextID
         nextID += 1
         let data = try await request(

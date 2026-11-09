@@ -12,6 +12,15 @@ struct PopoverView: View {
             }
             .pickerStyle(.segmented)
 
+            if model.selectedProvider == .codex, let account = model.codexAccount {
+                Text(account)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.dim)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             VStack(spacing: 10) {
                 if model.selectedProvider == .codex {
                     if let usage = model.codexUsage {

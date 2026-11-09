@@ -152,6 +152,43 @@ do {
     preconditionFailure("malformed result should fail")
 } catch CodexUsageError.malformedResponse {}
 
+// Codex account identity: email from id_token, account_id fallback.
+func fakeJWT(_ claims: [String: Any]) -> String {
+    let payload = try! JSONSerialization.data(withJSONObject: claims)
+        .base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+    return "eyJhbGciOiJub25lIn0.\(payload).sig"
+}
+let authWithEmail = try JSONSerialization.data(withJSONObject: [
+    "tokens": ["id_token": fakeJWT(["email": "shared@example.com"]), "account_id": "ws-1"],
+])
+precondition(CodexAccountIdentity.parse(authJSON: authWithEmail) == "shared@example.com")
+let authWithoutEmail = try JSONSerialization.data(withJSONObject: [
+    "tokens": ["id_token": "not-a-jwt", "account_id": "ws-1"],
+])
+precondition(CodexAccountIdentity.parse(authJSON: authWithoutEmail) == "ws-1")
+precondition(CodexAccountIdentity.parse(authJSON: Data("{}".utf8)) == nil)
+let identityHome = FileManager.default.temporaryDirectory
+    .appendingPathComponent("codex-identity-\(UUID().uuidString)")
+try FileManager.default.createDirectory(
+    at: identityHome.appendingPathComponent("accounts"),
+    withIntermediateDirectories: true
+)
+try authWithEmail.write(to: identityHome.appendingPathComponent("auth.json"))
+precondition(CodexAccountIdentity.label(home: identityHome) == "shared@example.com")
+try Data("shared\n".utf8).write(to: identityHome.appendingPathComponent("accounts/.current"))
+precondition(CodexAccountIdentity.label(home: identityHome) == "shared · shared@example.com")
+precondition(CodexAccountIdentity.defaultHome(
+    environment: ["CODEX_HOME": "/tmp/codex-x"],
+    homeDirectory: URL(fileURLWithPath: "/Users/u")
+).path == "/tmp/codex-x")
+precondition(CodexAccountIdentity.defaultHome(
+    environment: [:],
+    homeDirectory: URL(fileURLWithPath: "/Users/u")
+).path == "/Users/u/.codex")
+
 let encodedRequest = try CodexRequestEncoder.encode(
     id: 7,
     method: "account/rateLimits/read",
